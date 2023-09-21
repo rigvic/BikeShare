@@ -1,6 +1,7 @@
 library(tidyverse)
 library(tidymodels)
 library(vroom)
+library(glmnet)
 
 bike_train <- vroom("./train.csv")
 bike_test <- vroom("./test.csv")
@@ -62,4 +63,38 @@ bike_predictions_pois$datetime <- as.character(format(bike_test$datetime))
 bike_predictions_pois <- bike_predictions_pois %>% select(datetime, count)
 
 vroom_write(x=bike_predictions_pois, file="bike_predictions_pois.csv", delim=",")
+
+
+my_recipe2 <- recipe(count~., data = bike_train) %>%
+  step_num2factor(season, levels = c("Spring", "Summer", "Fall", "Winter")) %>%
+  step_mutate(weather=ifelse(weather==4, 3, weather)) %>%
+  step_num2factor(weather, levels = c("Clear", "Mist", "Rain")) %>%
+  step_time(datetime, features = "hour") %>%
+  step_rm(datetime) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_normalize(all_numeric_predictors())
+
+log_train_set <- bike_train %>%
+  mutate(count=log(count))
+
+lin_model <- linear_reg() %>%
+  set_engine("lm")
+
+
+preg_model <- poisson_reg(penalty = .25, mixture = .15) %>%
+  set_engine("glmnet")
+
+preg_wf <- workflow() %>%
+  add_recipe(my_recipe2) %>%
+  add_model(preg_model) %>%
+  fit(data=log_train_set)
+
+bike_predictions_preg <- predict(preg_wf, new_data = bike_test) %>%
+  mutate(.pred = exp(.pred))
+
+bike_predictions_preg$count <- bike_predictions_preg$.pred
+bike_predictions_preg$datetime <- as.character(format(bike_test$datetime))
+bike_predictions_preg <- bike_predictions_preg %>% select(datetime, count)
+
+vroom_write(x=bike_predictions_preg, file="bike_predictions_preg.csv", delim=",")
 
