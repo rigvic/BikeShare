@@ -3,6 +3,7 @@ library(tidymodels)
 library(vroom)
 library(glmnet)
 
+
 bike_train <- vroom("./train.csv")
 bike_test <- vroom("./test.csv")
 
@@ -81,7 +82,7 @@ lin_model <- linear_reg() %>%
   set_engine("lm")
 
 
-preg_model <- poisson_reg(penalty = .25, mixture = .15) %>%
+preg_model <- poisson_reg(penalty = .25, mixture = .115) %>%
   set_engine("glmnet")
 
 preg_wf <- workflow() %>%
@@ -97,4 +98,126 @@ bike_predictions_preg$datetime <- as.character(format(bike_test$datetime))
 bike_predictions_preg <- bike_predictions_preg %>% select(datetime, count)
 
 vroom_write(x=bike_predictions_preg, file="bike_predictions_preg.csv", delim=",")
+
+preg_model_2 <- linear_reg(penalty = tune(),
+                           mixture = tune()) %>%
+  set_engine("glmnet")
+
+preg_wf_2 <- workflow() %>%
+  add_recipe(my_recipe2) %>%
+  add_model(preg_model_2)
+
+tuning_grid <- grid_regular(penalty(),
+                            mixture(),
+                            levels = 5)
+
+folds <- vfold_cv(log_train_set, v = 5, repeats = 1)
+
+CV_results <- preg_wf_2 %>%
+  tune_grid(resamples = folds,
+            grid = tuning_grid,
+            metrics = metric_set(rmse, mae, rsq))
+
+collect_metrics(CV_results) %>%
+  filter(.metric == "rmse") %>%
+  ggplot(data =., aes(x = penalty, y = mean, color = factor(mixture))) + 
+  geom_line()
+
+bestTune <- CV_results %>%
+  select_best("rmse")
+
+final_wf <- preg_wf_2 %>%
+  finalize_workflow(bestTune) %>%
+  fit(data = log_train_set)
+
+# bike_predictions_preg_2 <- predict(preg_wf_2, new_data = bike_test) %>%
+# mutate(.pred = exp(.pred))
+
+bike_predictions_preg_2 <- final_wf %>%
+  predict(new_data = bike_test) %>%
+  mutate(.pred = exp(.pred)) %>%
+  bind_cols(., bike_test) %>%
+  select(datetime, .pred) %>%
+  rename(count = .pred) %>%
+  mutate(count = pmax(0, count)) %>%
+  mutate(datetime = as.character(format(datetime)))
+
+
+# bike_predictions_preg_2$count <- bike_predictions_preg_2$.pred
+# bike_predictions_preg_2$datetime <- as.character(format(bike_test$datetime))
+# bike_predictions_preg_2 <- bike_predictions_preg_2 %>% select(datetime, count)
+
+vroom_write(x=bike_predictions_preg_2, file="bike_predictions_preg_2.csv", delim=",")
+
+
+lin_model <- linear_reg() %>%
+  set_engine("lm")
+
+
+preg_model <- poisson_reg(penalty = .25, mixture = .115) %>%
+  set_engine("glmnet")
+
+preg_wf <- workflow() %>%
+  add_recipe(my_recipe2) %>%
+  add_model(preg_model) %>%
+  fit(data=log_train_set)
+
+bike_predictions_preg <- predict(preg_wf, new_data = bike_test) %>%
+  mutate(.pred = exp(.pred))
+
+bike_predictions_preg$count <- bike_predictions_preg$.pred
+bike_predictions_preg$datetime <- as.character(format(bike_test$datetime))
+bike_predictions_preg <- bike_predictions_preg %>% select(datetime, count)
+
+vroom_write(x=bike_predictions_preg, file="bike_predictions_preg.csv", delim=",")
+
+preg_model_2 <- linear_reg(penalty = tune(),
+                           mixture = tune()) %>%
+  set_engine("glmnet")
+
+preg_wf_2 <- workflow() %>%
+  add_recipe(my_recipe2) %>%
+  add_model(preg_model_2)
+
+tuning_grid <- grid_regular(penalty(),
+                            mixture(),
+                            levels = 5)
+
+folds <- vfold_cv(log_train_set, v = 5, repeats = 1)
+
+CV_results <- preg_wf_2 %>%
+  tune_grid(resamples = folds,
+            grid = tuning_grid,
+            metrics = metric_set(rmse, mae, rsq))
+
+collect_metrics(CV_results) %>%
+  filter(.metric == "rmse") %>%
+  ggplot(data =., aes(x = penalty, y = mean, color = factor(mixture))) + 
+  geom_line()
+
+bestTune <- CV_results %>%
+  select_best("rmse")
+
+final_wf <- preg_wf_2 %>%
+  finalize_workflow(bestTune) %>%
+  fit(data = log_train_set)
+
+# bike_predictions_preg_2 <- predict(preg_wf_2, new_data = bike_test) %>%
+  # mutate(.pred = exp(.pred))
+
+bike_predictions_preg_2 <- final_wf %>%
+  predict(new_data = bike_test) %>%
+  mutate(.pred = exp(.pred)) %>%
+  bind_cols(., bike_test) %>%
+  select(datetime, .pred) %>%
+  rename(count = .pred) %>%
+  mutate(count = pmax(0, count)) %>%
+  mutate(datetime = as.character(format(datetime)))
+
+
+# bike_predictions_preg_2$count <- bike_predictions_preg_2$.pred
+# bike_predictions_preg_2$datetime <- as.character(format(bike_test$datetime))
+# bike_predictions_preg_2 <- bike_predictions_preg_2 %>% select(datetime, count)
+
+vroom_write(x=bike_predictions_preg_2, file="bike_predictions_preg_2.csv", delim=",")
 
