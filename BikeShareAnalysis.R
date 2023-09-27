@@ -2,6 +2,7 @@ library(tidyverse)
 library(tidymodels)
 library(vroom)
 library(glmnet)
+library(rpart)
 
 
 bike_train <- vroom("./train.csv")
@@ -202,9 +203,6 @@ final_wf <- preg_wf_2 %>%
   finalize_workflow(bestTune) %>%
   fit(data = log_train_set)
 
-# bike_predictions_preg_2 <- predict(preg_wf_2, new_data = bike_test) %>%
-  # mutate(.pred = exp(.pred))
-
 bike_predictions_preg_2 <- final_wf %>%
   predict(new_data = bike_test) %>%
   mutate(.pred = exp(.pred)) %>%
@@ -215,9 +213,54 @@ bike_predictions_preg_2 <- final_wf %>%
   mutate(datetime = as.character(format(datetime)))
 
 
-# bike_predictions_preg_2$count <- bike_predictions_preg_2$.pred
-# bike_predictions_preg_2$datetime <- as.character(format(bike_test$datetime))
-# bike_predictions_preg_2 <- bike_predictions_preg_2 %>% select(datetime, count)
 
 vroom_write(x=bike_predictions_preg_2, file="bike_predictions_preg_2.csv", delim=",")
+
+# REGRESSION TREE
+my_mod <- decision_tree(tree_depth = tune(),
+                        cost_complexity = tune(),
+                        min_n = tune()) %>%
+  set_engine("rpart") %>%
+  set_mode("regression")
+
+preg_wf_tree <- workflow() %>%
+  add_recipe(my_recipe2) %>%
+  add_model(my_mod)
+
+tuning_grid <- grid_regular(tree_depth(),
+                            cost_complexity(),
+                            min_n(),
+                            levels = (5))
+
+folds <- vfold_cv(log_train_set, v = 5, repeats = 1)
+
+CV_results <- preg_wf_tree %>%
+  tune_grid(resamples = folds,
+            grid = tuning_grid,
+            metrics = metric_set(rmse, mae, rsq))
+
+collect_metrics(CV_results) %>%
+  filter(.metric == "rmse") %>%
+  ggplot(data =., aes(x = penalty, y = mean, color = factor(mixture))) + 
+  geom_line()
+
+bestTune <- CV_results %>%
+  select_best("rmse")
+
+final_wf <- preg_wf_tree %>%
+  finalize_workflow(bestTune) %>%
+  fit(data = log_train_set)
+
+bike_predictions_tree <- final_wf %>%
+  predict(new_data = bike_test) %>%
+  mutate(.pred = exp(.pred)) %>%
+  bind_cols(., bike_test) %>%
+  select(datetime, .pred) %>%
+  rename(count = .pred) %>%
+  mutate(count = pmax(0, count)) %>%
+  mutate(datetime = as.character(format(datetime)))
+
+
+
+vroom_write(x=bike_predictions_tree, file="bike_predictions_preg_tree.csv", delim=",")
 
