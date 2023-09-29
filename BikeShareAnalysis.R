@@ -2,7 +2,10 @@ library(tidyverse)
 library(tidymodels)
 library(vroom)
 library(glmnet)
+install.packages("rpart")
 library(rpart)
+install.packages("ranger")
+library(ranger)
 
 
 bike_train <- vroom("./train.csv")
@@ -263,4 +266,51 @@ bike_predictions_tree <- final_wf %>%
 
 
 vroom_write(x=bike_predictions_tree, file="bike_predictions_preg_tree.csv", delim=",")
+
+# RANDOM FORESTS
+rf_mod <- rand_forest(mtry = tune(),
+                      min_n = tune(),
+                      trees = 500) %>%
+  set_engine("ranger") %>%
+  set_mode("regression")
+
+wf_rf <- workflow() %>%
+  add_recipe(my_recipe2) %>%
+  add_model(rf_mod)
+
+tuning_grid <- grid_regular(mtry(range = c(1, 10)),
+                            min_n(),
+                            levels = (5))
+
+folds <- vfold_cv(log_train_set, v = 5, repeats = 1)
+
+CV_results <- wf_rf %>%
+  tune_grid(resamples = folds,
+            grid = tuning_grid,
+            metrics = metric_set(rmse, mae, rsq))
+
+collect_metrics(CV_results) %>%
+  filter(.metric == "rmse") %>%
+  ggplot(data =., aes(x = penalty, y = mean, color = factor(mixture))) + 
+  geom_line()
+
+bestTune <- CV_results %>%
+  select_best("rmse")
+
+final_wf <- wf_rf %>%
+  finalize_workflow(bestTune) %>%
+  fit(data = log_train_set)
+
+bike_predictions_rf <- final_wf %>%
+  predict(new_data = bike_test) %>%
+  mutate(.pred = exp(.pred)) %>%
+  bind_cols(., bike_test) %>%
+  select(datetime, .pred) %>%
+  rename(count = .pred) %>%
+  mutate(count = pmax(0, count)) %>%
+  mutate(datetime = as.character(format(datetime)))
+
+
+
+vroom_write(x=bike_predictions_rf, file="bike_predictions_preg_rf.csv", delim=",")
 
