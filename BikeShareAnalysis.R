@@ -314,3 +314,89 @@ bike_predictions_rf <- final_wf %>%
 
 vroom_write(x=bike_predictions_rf, file="bike_predictions_preg_rf.csv", delim=",")
 
+
+# STACKED MODEL
+bike_train <- vroom("./train.csv") %>%
+  select(-casual, -registered) %>%
+  mutate(count=log(count))
+
+
+folds <- vfold_cv(bike_train, v = 5)
+
+untunedModel <- control_stack_grid()
+tunedModel <- control_stack_resamples()
+
+preg_model <- linear_reg(penalty=tune(),
+                         mixture=tune()) %>% #Set model and tuning
+  set_engine("glmnet") # Function to fit in R
+## Set Workflow
+preg_wf <- workflow() %>%
+  add_recipe(my_recipe2) %>%
+  add_model(preg_model)
+
+## Grid of values to tune over
+preg_tuning_grid <- grid_regular(penalty(),
+                                 mixture(),
+                                 levels = 5)
+
+
+preg_models <- preg_wf %>%
+  tune_grid(resamples=folds,
+            grid=preg_tuning_grid,
+            metrics=metric_set(rmse),
+            control = untunedModel)
+
+my_mod <- linear_reg() %>% #Type of model
+  set_engine("lm") # Engine = What R function to use
+
+bike_workflow <- workflow() %>%
+  add_recipe(my_recipe) %>%
+  add_model(my_mod)
+lin_reg_model <- fit_resamples(
+  bike_workflow,
+  resamples = folds,
+  metrics = metric_set(rmse),
+  control = tunedModel)
+
+
+rf_mod <- rand_forest(mtry = tune(),
+                      min_n = tune(),
+                      trees = 500) %>%
+  set_engine("ranger") %>%
+  set_mode("regression")
+
+wf_rf <- workflow() %>%
+  add_recipe(my_recipe2) %>%
+  add_model(rf_mod)
+
+tuning_grid <- grid_regular(mtry(range = c(1, 10)),
+                            min_n(),
+                            levels = (5))
+
+rf_folds <- wf_rf %>%
+  tune_grid(resamples = folds,
+            grid = tuning_grid,
+            metrics = metric_set(rmse),
+            control=untunedModel)
+
+bike_stack <- stacks() %>%
+  add_candidates(preg_models) %>%
+  add_candidates(lin_reg_model) %>%
+  add_candidates(rf_folds)
+
+fitted_bike_stack <- bike_stack %>%
+  blend_predictions() %>%
+  fit_members()
+
+as_tibble(bike_stack)
+
+
+stacked_predictions <- predict(fitted_bike_stack, new_data = bike_test) %>%
+  mutate(.pred = exp(.pred)) %>%
+  bind_cols(., bike_test) %>%
+  select(datetime, .pred) %>%
+  rename(count = .pred) %>%
+  mutate(datetime = as.character(format(datetime)))
+
+vroom_write(x=stacked_predictions, file="stacked_predictions.csv", delim=",")
+
