@@ -1,13 +1,15 @@
 library(tidyverse)
 library(tidymodels)
 library(vroom)
+library(poissonreg)
 library(glmnet)
-install.packages("rpart")
 library(rpart)
-install.packages("ranger")
 library(ranger)
+library(stacks)
 
 
+
+# LINEAR REGRESSION
 bike_train <- vroom("./train.csv")
 bike_test <- vroom("./test.csv")
 
@@ -50,8 +52,7 @@ bike_predictions <- bike_predictions %>% select(datetime, count)
 
 vroom_write(x=bike_predictions, file="bike_predictions.csv", delim=",")
 
-library(poissonreg)
-
+# POISSON REGRESSION
 pois_mod <- poisson_reg() %>% #Type of model
   set_engine("glm") # GLM = generalized linear model
 
@@ -64,17 +65,19 @@ bike_predictions_pois <- predict(bike_pois_workflow,
                                  new_data= bike_test) # Use fit to predict
 
 bike_predictions_pois$count <- bike_predictions_pois$.pred
+
 bike_predictions_pois$datetime <- as.character(format(bike_test$datetime))
 bike_predictions_pois <- bike_predictions_pois %>% select(datetime, count)
 
 vroom_write(x=bike_predictions_pois, file="bike_predictions_pois.csv", delim=",")
 
-
+# LOG RECIPE
 my_recipe2 <- recipe(count~., data = bike_train) %>%
   step_num2factor(season, levels = c("Spring", "Summer", "Fall", "Winter")) %>%
   step_mutate(weather=ifelse(weather==4, 3, weather)) %>%
   step_num2factor(weather, levels = c("Clear", "Mist", "Rain")) %>%
   step_time(datetime, features = "hour") %>%
+  step_date(datetime, features = "year") %>%
   step_rm(datetime) %>%
   step_dummy(all_nominal_predictors()) %>%
   step_normalize(all_numeric_predictors())
@@ -240,7 +243,8 @@ folds <- vfold_cv(log_train_set, v = 5, repeats = 1)
 CV_results <- preg_wf_tree %>%
   tune_grid(resamples = folds,
             grid = tuning_grid,
-            metrics = metric_set(rmse, mae, rsq))
+            metrics = metric_set(rmse, mae, rsq),
+            control = untunedModel)
 
 collect_metrics(CV_results) %>%
   filter(.metric == "rmse") %>%
@@ -311,9 +315,7 @@ bike_predictions_rf <- final_wf %>%
   mutate(datetime = as.character(format(datetime)))
 
 
-
 vroom_write(x=bike_predictions_rf, file="bike_predictions_preg_rf.csv", delim=",")
-
 
 # STACKED MODEL
 bike_train <- vroom("./train.csv") %>%
@@ -365,6 +367,7 @@ rf_mod <- rand_forest(mtry = tune(),
   set_engine("ranger") %>%
   set_mode("regression")
 
+
 wf_rf <- workflow() %>%
   add_recipe(my_recipe2) %>%
   add_model(rf_mod)
@@ -399,4 +402,3 @@ stacked_predictions <- predict(fitted_bike_stack, new_data = bike_test) %>%
   mutate(datetime = as.character(format(datetime)))
 
 vroom_write(x=stacked_predictions, file="stacked_predictions.csv", delim=",")
-
